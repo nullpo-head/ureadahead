@@ -474,6 +474,7 @@ static void free_device (struct device_data *dev)
 		inode = &dev->inodes[i];
 		/* inode->map has one meta data element at the start */
 		inode->map--;
+		printf("taakyas: free inode: %ld, map: %p\n", inode->inode, inode->map);
 		free (inode->map);
 		free (inode->name);
 	}
@@ -519,9 +520,9 @@ read_trace (const void *parent,
 
 	context.parent = parent;
 
-	context.do_sys_open = tep_find_event_by_name (tep, FS_SYSTEM, "do_sys_open");
-	context.open_exec = tep_find_event_by_name (tep, FS_SYSTEM, "open_exec");
-	context.uselib = tep_find_event_by_name (tep, FS_SYSTEM, "uselib");
+	context.do_sys_open = NULL; //tep_find_event_by_name (tep, FS_SYSTEM, "do_sys_open");
+	context.open_exec = NULL; //tep_find_event_by_name (tep, FS_SYSTEM, "open_exec");
+	context.uselib = NULL; // tep_find_event_by_name (tep, FS_SYSTEM, "uselib");
 	init_filemap_tep (tep, "mm_filemap_fault", &context.filemap_fault);
 	init_filemap_tep (tep, "mm_filemap_map_pages", &context.filemap_map_pages);
 	init_filemap_tep (tep, "mm_filemap_get_pages", &context.filemap_get_pages);
@@ -713,7 +714,7 @@ add_inodes (struct device_data **device_hash, PackFile **files, size_t *num_file
 	unsigned int major, minor, device;
 	struct inode_data **inodes;
 	struct device_data *dev;
-	char mapname[PATH_MAX];
+	char mapname[PATH_MAX + 1];
 	char *line = NULL;
 	size_t len = 0;
 	FILE *fp;
@@ -811,9 +812,12 @@ remove_untouched_blocks  (const void *parent,
 				/* The following loops will skip remaining blocks of this path */
 				continue;
 			}
-
 			maps = inode->map;
 			nr_maps = inode->nr_maps;
+
+			for (int k = 0; k < inode->nr_maps; k++) {
+				printf("final map: ino: %lu, i: %d index: %ld, last_index: %ld\n", inode->inode, k, inode->map[k].start, inode->map[k].end);
+			}
 		}
 
 		/* skip filemaps until we find an overlap with the blocks */
@@ -841,12 +845,17 @@ remove_untouched_blocks  (const void *parent,
 
 			/* new_length is zero when they touch each other. */
 			if (new_length > 0) {
-			reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
-				parent, sizeof(PackBlock) * (++num_blocks)));
-			reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
-			reduced_blocks[num_blocks - 1].offset = new_offset;
-			reduced_blocks[num_blocks - 1].length = new_length;
-			reduced_blocks[num_blocks - 1].physical = new_physical;
+				printf("takayas: from pack [%lu, %lu (len: %lu)] to [%lu, %lu (%lu)] due to [%ld, %ld])\n", block->offset, block->offset + block->length, block->length, new_offset, new_end, new_length, range->start << PAGE_SHIFT, range->end << PAGE_SHIFT);
+				reduced_blocks = NIH_MUST (nih_realloc (reduced_blocks,
+					parent, sizeof(PackBlock) * (++num_blocks)));
+				reduced_blocks[num_blocks - 1].pathidx = block->pathidx;
+				reduced_blocks[num_blocks - 1].offset = new_offset;
+				reduced_blocks[num_blocks - 1].length = new_length;
+				reduced_blocks[num_blocks - 1].physical = new_physical;
+			}
+
+			else {
+				printf("takayas: skip pack [%lu, %lu (len: %lu)] to [%lu, %lu (%lu)] due to [%ld, %ld])\n", block->offset, block->offset + block->length, block->length, new_offset, new_end, new_length, range->start << PAGE_SHIFT, range->end << PAGE_SHIFT);
 			}
 
 			/* Next block still can overlap with this range. Next blockidx loop. */
@@ -866,8 +875,8 @@ remove_untouched_blocks  (const void *parent,
 
 static int
 read_trace_cb  (struct tep_event *event,
-	        struct tep_record *record,
-	        int cpu, void *read_trace_context)
+		struct tep_record *record,
+		int cpu, void *read_trace_context)
 {
 	struct read_trace_context *context = read_trace_context;
 
@@ -875,16 +884,16 @@ read_trace_cb  (struct tep_event *event,
 	    (context->open_exec && event->id == context->open_exec->id) ||
 	    (context->uselib && event->id == context->uselib->id))
 		return read_path_trace (event, record, context->parent,
-				        context->path_prefix_filter,
+					context->path_prefix_filter,
 					context->path_prefix,
-				        context->files, context->num_files,
-				        context->force_ssd_mode);
+					context->files, context->num_files,
+					context->force_ssd_mode);
 
 	if ((context->filemap_fault.event && event->id == context->filemap_fault.event->id) ||
 	    (context->filemap_get_pages.event && event->id == context->filemap_get_pages.event->id) ||
 	    (context->filemap_map_pages.event && event->id == context->filemap_map_pages.event->id))
 		return read_filemap_trace (event, record,
-				           &context->filemap_fault,
+					   &context->filemap_fault,
 					   &context->filemap_get_pages,
 					   &context->filemap_map_pages,
 					   context->device_hash);
@@ -894,11 +903,11 @@ read_trace_cb  (struct tep_event *event,
 
 static int
 read_path_trace  (struct tep_event *event, struct tep_record *record,
-	          const void *parent,
-	          const char *path_prefix_filter,
-	          const PathPrefixOption *path_prefix,
-	          PackFile **files, size_t *num_files,
-	          int force_ssd_mode)
+		  const void *parent,
+		  const char *path_prefix_filter,
+		  const PathPrefixOption *path_prefix,
+		  PackFile **files, size_t *num_files,
+		  int force_ssd_mode)
 {
 	char *path, *tep_path = NULL;
 	int   len;
@@ -1232,6 +1241,8 @@ trace_file (const void *parent,
 	/* Grow the PackFile array and fill in the details for the new
 	 * file.
 	 */
+	printf("realloc; *files: %p, num_files: %p\n", *files, num_files);
+	printf("realloc; *files: %p, *num_files: %d\n", *files, *num_files);
 	*files = NIH_MUST (nih_realloc (*files, parent,
 					(sizeof (PackFile) * (*num_files + 1))));
 
@@ -1681,6 +1692,8 @@ static int read_filemap_trace  (struct tep_event *event,
 	major = device >> 20;
 	minor = device & 0xff;
 
+	printf("map: ino: %llu, device: %llu, index: %llu, last_index: %llu\n", ino, device, index, last_index);
+
 	trace_add_file_map (device_hash, makedev (major, minor), ino, index, last_index);
 
 	return 0;
@@ -1720,6 +1733,7 @@ static void trace_add_file_map (struct device_data **device_hash,
 	 */
 	map = bsearch (&key, inode->map, inode->nr_maps, sizeof(key), cmp_file_map);
 	if (! map) {
+		printf("takayas: couldn't find map for [%ld, %ld)\n", key.start, key.end);
 		/* A new index that also does not touch a mapping. */
 		add_map (inode, index, last_index);
 		return;
@@ -1922,7 +1936,7 @@ static struct inode_data *add_inode (struct device_data *dev, unsigned long ino)
 		 * if it's the first one.
 		 */
 		inode = bsearch (&key, dev->inodes, dev->nr_inodes, sizeof(key),
-			         cmp_inodes_range);
+				 cmp_inodes_range);
 		if (inode)
 			index = inode - dev->inodes;
 		else
@@ -2026,3 +2040,234 @@ static struct device_data *find_device (struct device_data **device_hash,
 
 	return dev;
 }
+
+#include <assert.h>
+
+void test_trace_add_file_map() {
+	struct device_data *device_hash[HASH_SIZE] = {0};
+
+	struct {
+		dev_t dev_id;
+		unsigned long ino;
+		off_t index;
+		off_t last_index;
+		// Expected outcome after the call
+		struct file_map expected_maps[30][2];
+		int expected_num_maps;
+	} test_cases[] = {
+		{
+			makedev(8, 0), 12345, 0, 0, {{0, 1}}, 1  // New inode, single map
+		},
+		{
+			makedev(8, 0),
+			12345,
+			2,
+			3,
+			{{0, 1}, {2, 4}},
+			2  // Same inode, non-overlapping neighbor new map
+		},
+		{
+			makedev(8, 1), 67890, 0, 0, {{0, 1}}, 1  // New device and inode
+		},
+		{
+			makedev(8, 0), 12345, 1, 1, {{0, 4}}, 1  // Fill the gap, merge into a
+								 // single map
+		},
+		{
+			makedev(8, 0), 12345, 4, 5, {{0, 6}}, 1  // Neighbor touching the end.
+								 // merge
+		},
+		{
+			makedev(8, 0),
+			12345,
+			8,
+			10,
+			{{0, 6}, {8, 11}},
+			2  // New non-overlapping map
+		},
+		{
+			makedev(8, 0), 12345, 7, 7, {{0, 6}, {7, 11}}, 2  // neighbor touching
+									  // the begin
+		},
+		{
+			makedev(8, 0), 12345, 1, 3, {{0, 6}, {7, 11}}, 2  // already covered.
+									  // no change
+		},
+		{
+			makedev(8, 0), 12345, 7, 10, {{0, 6}, {7, 11}}, 2  // add exact same
+									   // range.
+		},
+		{
+			makedev(8, 0), 12345, 2, 8, {{0, 11}}, 1  // Overlap in the middle,
+								  // merge
+		},
+		{
+			makedev(8, 0),
+			12345,
+			20,
+			30,
+			{
+				{0, 11},
+				{20, 31},
+			},
+			2  // New non-overlapping map
+		},
+		{
+			makedev(8, 0),
+			12345,
+			50,
+			60,
+			{{0, 11}, {20, 31}, {50, 61}},
+			3  // New non-overlapping map
+		},
+		{
+			makedev(8, 0),
+			12345,
+			70,
+			80,
+			{{0, 11}, {20, 31}, {50, 61}, {70, 81}},
+			4  // New non-overlapping map
+		},
+		{
+			makedev(8, 0),
+			12345,
+			90,
+			100,
+			{{0, 11}, {20, 31}, {50, 61}, {70, 81}, {90, 101}},
+			5  // New non-overlapping map
+		},
+		{
+			makedev(8, 0),
+			12345,
+			25,
+			69,
+			{{0, 11}, {20, 81}, {90, 101}},
+			3  // merge multiple
+		},
+	};
+
+	// Iterate and test with assertions
+	for (size_t i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
+		printf("Test case %zu:\n", i + 1);
+
+		trace_add_file_map(device_hash, test_cases[i].dev_id, test_cases[i].ino,
+				test_cases[i].index, test_cases[i].last_index);
+
+		// Find the device and inode in the hash
+		struct device_data *dev = find_device(device_hash, test_cases[i].dev_id);
+		assert(dev != NULL);
+		struct inode_data *inode = find_inode(dev, test_cases[i].ino);
+		assert(inode != NULL);
+
+		printf("inode: %ld ", inode->inode);
+		for (int j = 0; j < inode->nr_maps; j++) {
+			printf("[%ld, %ld), ", inode->map[j].start, inode->map[j].end);
+		}
+		printf("\n");
+
+		// Assert the number of maps and their ranges
+		assert(inode->nr_maps == test_cases[i].expected_num_maps);
+		for (int j = 0; j < inode->nr_maps; j++) {
+			assert(inode->map[j].start == test_cases[i].expected_maps[j]->start);
+			assert(inode->map[j].end == test_cases[i].expected_maps[j]->end);
+		}
+	}
+
+	free_device_hash(device_hash);
+}
+
+void test_remove_untouched_blocks() {
+	struct device_data *device_hash[HASH_SIZE] = {0};
+	nih_local PackFile *file = nih_new(NULL, PackFile);
+	file->dev = makedev(8, 0);  // Sample device
+	file->rotational = 0;
+	file->num_paths = 2;  // Two paths/files in this PackFile
+
+	// Allocate memory for paths and blocks (you'll need to fill these with actual
+	// data later)
+	file->paths = nih_alloc(file, sizeof(PackPath) * file->num_paths);
+	file->paths[0].ino = 1;
+	file->paths[1].ino = 2;
+	file->num_blocks = 6;
+	file->blocks = nih_alloc(
+			file, sizeof(PackBlock) *
+			file->num_blocks);  // Assuming an initial 5 blocks for testing
+
+	// cover the first block
+	trace_add_file_map(device_hash, file->dev, 1, 13,
+			18);
+			      // part of the second block
+	trace_add_file_map(device_hash, file->dev, 1, 22,
+			23);
+			      // cover 3rd and 4th blocks
+	trace_add_file_map(device_hash, file->dev, 1, 32,
+			45);
+			      // cover part of the 5th block
+	trace_add_file_map(device_hash, file->dev, 1, 52,
+			53);
+			      // still part of the 5th block
+	trace_add_file_map(device_hash, file->dev, 1, 56,
+			57);
+			      // touch the begin of 6th block
+	trace_add_file_map(device_hash, file->dev, 1, 62,
+			62);
+			      // touch the end of 6th block
+	trace_add_file_map(device_hash, file->dev, 1, 69,
+			69);
+
+	puts("takayas after add file map");
+
+	file->blocks[0].pathidx = 0;
+	file->blocks[0].offset = 13 << PAGE_SHIFT;
+	file->blocks[0].length = 5 << PAGE_SHIFT;
+
+	file->blocks[1].pathidx = 0;
+	file->blocks[1].offset = 20 << PAGE_SHIFT;
+	file->blocks[1].length = 5 << PAGE_SHIFT;
+
+	file->blocks[2].pathidx = 0;
+	file->blocks[2].offset = 33 << PAGE_SHIFT;
+	file->blocks[2].length = 5 << PAGE_SHIFT;
+
+	file->blocks[3].pathidx = 0;
+	file->blocks[3].offset = 43 << PAGE_SHIFT;
+	file->blocks[3].length = 5 << PAGE_SHIFT;
+
+	file->blocks[4].pathidx = 0;
+	file->blocks[4].offset = 53 << PAGE_SHIFT;
+	file->blocks[4].length = 5 << PAGE_SHIFT;
+
+	file->blocks[5].pathidx = 0;
+	file->blocks[5].offset = 63 << PAGE_SHIFT;
+	file->blocks[5].length = 5 << PAGE_SHIFT;
+
+	printf("before file: %d\n", file->num_blocks);
+
+	// Call the function under test
+	remove_untouched_blocks(NULL, device_hash, file);
+
+	// Define the expected reduced blocks (replace with actual data)
+	PackBlock expected_blocks[] = {
+		{0, 53248, 20480},                       // Page 0 of pathidx 0
+		{0, 22 << PAGE_SHIFT, 2 << PAGE_SHIFT},  // Page 0 of pathidx 0
+		{0, 33 << PAGE_SHIFT, 5 << PAGE_SHIFT},  // Page 0 of pathidx 0
+		{0, 43 << PAGE_SHIFT, 3 << PAGE_SHIFT},  // Page 0 of pathidx 0
+		{0, 53 << PAGE_SHIFT, 1 << PAGE_SHIFT},  // Page 0 of pathidx 0
+		{0, 56 << PAGE_SHIFT, 2 << PAGE_SHIFT},  // Page 0 of pathidx 0
+	};
+	int expected_num_blocks =
+		sizeof(expected_blocks) / sizeof(expected_blocks[0]);
+
+	printf("file: %ld\n", file->num_blocks);
+	// Assertions to validate the outcome
+	nih_assert(file->num_blocks == expected_num_blocks);
+	for (int i = 0; i < expected_num_blocks; i++) {
+		assert(file->blocks[i].pathidx == expected_blocks[i].pathidx);
+		assert(file->blocks[i].offset == expected_blocks[i].offset);
+		assert(file->blocks[i].length == expected_blocks[i].length);
+	}
+
+	// Cleanup
+	free_device_hash(device_hash);
+}
+

@@ -264,6 +264,12 @@ main (int   argc,
 	if (! args)
 		exit (1);
 
+	printf("test add file map\n");
+	test_trace_add_file_map();
+	printf("test remove untouched blocks\n");
+	test_remove_untouched_blocks();
+	exit(0);
+
 	/* Lookup the filename for the pack based on the path given
 	 * (if any).
 	 */

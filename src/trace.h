@@ -40,6 +40,8 @@ int trace (int daemonise, int timeout,
            const PathPrefixOption *path_prefix,
            int use_existing_trace_events,
            int force_ssd_mode);
+void test_trace_add_file_map();
+void test_remove_untouched_blocks();
 
 NIH_END_EXTERN
 
